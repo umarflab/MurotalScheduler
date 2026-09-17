@@ -85,6 +85,37 @@ class AppStore(context: Context) {
         }
     }
 
+    fun nextUriForSchedule(schedule: PlaybackSchedule): String? {
+        if (schedule.targetType == "track") return resolveUris("track", schedule.targetId).firstOrNull()
+        val playlist = playlists().firstOrNull { it.id == schedule.targetId } ?: return null
+        val availableTracks = tracks().associateBy { it.id }
+        val ids = playlist.trackIds.filter { availableTracks.containsKey(it) }
+        if (ids.isEmpty()) return null
+        val selectedId = if (schedule.playbackMode == "shuffle_cycle") {
+            val key = "shuffle_${schedule.id}"
+            val stored = runCatching {
+                val array = JSONArray(prefs.getString(key, "[]"))
+                MutableList(array.length()) { array.getString(it) }.filter { it in ids }.toMutableList()
+            }.getOrDefault(mutableListOf())
+            if (stored.isEmpty()) {
+                stored.addAll(ids.shuffled())
+                val previous = prefs.getString("${key}_last", null)
+                if (stored.size > 1 && stored.first() == previous) {
+                    stored.add(stored.removeAt(0))
+                }
+            }
+            val chosen = stored.removeAt(0)
+            prefs.edit().putString(key, JSONArray(stored).toString()).putString("${key}_last", chosen).apply()
+            chosen
+        } else {
+            val key = "sequential_${schedule.id}"
+            val index = prefs.getInt(key, 0).mod(ids.size)
+            prefs.edit().putInt(key, (index + 1).mod(ids.size)).apply()
+            ids[index]
+        }
+        return availableTracks[selectedId]?.uri
+    }
+
     fun targetName(type: String, id: String): String = if (type == "track") {
         tracks().firstOrNull { it.id == id }?.title ?: "Track tidak ditemukan"
     } else {

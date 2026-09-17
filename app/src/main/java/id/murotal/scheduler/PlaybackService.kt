@@ -19,6 +19,9 @@ class PlaybackService : Service() {
     companion object {
         const val ACTION_PLAY = "play"
         const val ACTION_STOP = "stop"
+        const val ACTION_PAUSE_RESUME = "pause_resume"
+        const val ACTION_SEEK = "seek"
+        const val ACTION_STATE = "id.murotal.scheduler.PLAYBACK_STATE"
         const val EXTRA_URIS = "uris"
         const val EXTRA_TITLE = "title"
         const val EXTRA_VOLUME = "volume"
@@ -28,6 +31,11 @@ class PlaybackService : Service() {
         const val EXTRA_EQ_ENABLED = "eq_enabled"
         const val EXTRA_EQ_PRESET = "eq_preset"
         const val EXTRA_EQ_BANDS = "eq_bands"
+        const val EXTRA_POSITION = "position"
+        const val EXTRA_DURATION = "duration"
+        const val EXTRA_PLAYING = "playing"
+        const val EXTRA_QUEUE_INDEX = "queue_index"
+        const val EXTRA_QUEUE_SIZE = "queue_size"
         private const val CHANNEL_ID = "murotal_playback"
         private const val NOTIFICATION_ID = 1001
     }
@@ -47,6 +55,13 @@ class PlaybackService : Service() {
     private var eqEnabled = false
     private var eqPreset = "Normal"
     private var eqBands: List<Int> = listOf(0, 0, 0, 0, 0)
+    private val stateHandler by lazy { android.os.Handler(mainLooper) }
+    private val stateTask = object : Runnable {
+        override fun run() {
+            broadcastState()
+            if (player != null) stateHandler.postDelayed(this, 500)
+        }
+    }
 
     override fun onCreate() {
         super.onCreate()
@@ -58,6 +73,15 @@ class PlaybackService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_STOP -> stopPlayback()
+            ACTION_PAUSE_RESUME -> {
+                player?.let { if (it.isPlaying) it.pause() else it.start() }
+                broadcastState()
+            }
+            ACTION_SEEK -> {
+                val position = intent.getIntExtra(EXTRA_POSITION, 0)
+                player?.seekTo(position.coerceAtLeast(0))
+                broadcastState()
+            }
             ACTION_PLAY -> {
                 queue = intent.getStringArrayListExtra(EXTRA_URIS).orEmpty()
                 mode = intent.getStringExtra(EXTRA_MODE) ?: if (queue.size == 1) "single" else "sequential"
@@ -73,6 +97,8 @@ class PlaybackService : Service() {
                 setDeviceVolume(intent.getIntExtra(EXTRA_VOLUME, -1), restoreVolume)
                 startForeground(NOTIFICATION_ID, notification(title))
                 playCurrent()
+                stateHandler.removeCallbacks(stateTask)
+                stateHandler.post(stateTask)
             }
         }
         return START_NOT_STICKY
@@ -129,7 +155,8 @@ class PlaybackService : Service() {
     private fun applyAudioEffects(activePlayer: MediaPlayer) {
         if (!eqEnabled) return
         runCatching {
-            equalizer = Equalizer(0, activePlayer.audioSessionId).apply {
+            equalizer = Equalizer(1000, activePlayer.audioSessionId).apply {
+                enabled = false
                 val range = bandLevelRange
                 val minimum = range[0].toInt()
                 val maximum = range[1].toInt()
@@ -159,6 +186,19 @@ class PlaybackService : Service() {
             activePlayer.attachAuxEffect(reverb!!.id)
             activePlayer.setAuxEffectSendLevel(reverbConfig.second)
         }
+    }
+
+    private fun broadcastState() {
+        val active = player
+        val state = Intent(ACTION_STATE).setPackage(packageName).apply {
+            putExtra(EXTRA_TITLE, title)
+            putExtra(EXTRA_POSITION, runCatching { active?.currentPosition ?: 0 }.getOrDefault(0))
+            putExtra(EXTRA_DURATION, runCatching { active?.duration ?: 0 }.getOrDefault(0))
+            putExtra(EXTRA_PLAYING, runCatching { active?.isPlaying ?: false }.getOrDefault(false))
+            putExtra(EXTRA_QUEUE_INDEX, queueIndex)
+            putExtra(EXTRA_QUEUE_SIZE, queue.size)
+        }
+        sendBroadcast(state)
     }
 
     private fun releaseAudioEffects() {
@@ -194,6 +234,7 @@ class PlaybackService : Service() {
         .build()
 
     private fun stopPlayback() {
+        stateHandler.removeCallbacks(stateTask)
         player?.stop()
         player?.release()
         player = null
@@ -206,11 +247,15 @@ class PlaybackService : Service() {
         }
         previousVolume = null
         restoreVolume = false
+        queue = emptyList()
+        queueIndex = 0
+        broadcastState()
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
     }
 
     override fun onDestroy() {
+        stateHandler.removeCallbacks(stateTask)
         player?.release()
         player = null
         releaseAudioEffects()

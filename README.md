@@ -15,6 +15,9 @@ Aplikasi Android offline untuk memutar murotal atau audio lain secara manual dan
 - Edit jadwal yang telah disimpan tanpa membuat alarm ganda.
 - Atur equalizer lima pita dan preset Voice, Room, Concert, Ballroom, Hall, serta Plate secara terpisah pada setiap jadwal.
 - Preset ruang memakai jalur auxiliary reverb dengan intensitas berbeda untuk Room, Ballroom, Concert, Hall, dan Plate.
+- Tampilkan panel pemutar dengan posisi, durasi, seek bar, jeda/lanjut, dan berhenti.
+- Tampilkan equalizer sebagai lima slider vertikal.
+- Simpan kemajuan playlist per jadwal: mode setelah-audio-selesai memutar satu track per kejadian, lalu melanjutkan track berikutnya tanpa pengulangan pada siklus yang sama.
 - Pulihkan jadwal setelah telepon dinyalakan ulang.
 - Berjalan tanpa koneksi internet.
 

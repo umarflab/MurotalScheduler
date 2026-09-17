@@ -4,6 +4,9 @@ import android.Manifest
 import android.app.AlarmManager
 import android.app.TimePickerDialog
 import android.content.Intent
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.graphics.Typeface
 import android.net.Uri
@@ -34,7 +37,28 @@ class MainActivity : AppCompatActivity() {
     private lateinit var store: AppStore
     private lateinit var content: LinearLayout
     private lateinit var nowPlaying: TextView
+    private lateinit var playbackProgress: SeekBar
+    private lateinit var playbackTime: TextView
+    private lateinit var pauseButton: Button
+    private var playbackDuration = 0
+    private var userSeeking = false
     private var selectedTab = 0
+
+    private val playbackReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            if (intent?.action != PlaybackService.ACTION_STATE) return
+            val position = intent.getIntExtra(PlaybackService.EXTRA_POSITION, 0)
+            playbackDuration = intent.getIntExtra(PlaybackService.EXTRA_DURATION, 0)
+            val playing = intent.getBooleanExtra(PlaybackService.EXTRA_PLAYING, false)
+            val index = intent.getIntExtra(PlaybackService.EXTRA_QUEUE_INDEX, 0)
+            val size = intent.getIntExtra(PlaybackService.EXTRA_QUEUE_SIZE, 0)
+            val title = intent.getStringExtra(PlaybackService.EXTRA_TITLE) ?: "Audio"
+            nowPlaying.text = if (size > 1) "$title • Track ${index + 1}/$size" else title
+            if (!userSeeking) playbackProgress.progress = if (playbackDuration > 0) position * 1000 / playbackDuration else 0
+            playbackTime.text = "${durationTime(position)} / ${durationTime(playbackDuration)}"
+            pauseButton.text = if (playing) "Jeda" else "Lanjut"
+        }
+    }
 
     private val audioPicker = registerForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
         if (uris.isEmpty()) return@registerForActivityResult
@@ -56,12 +80,30 @@ class MainActivity : AppCompatActivity() {
         store = AppStore(this)
         content = findViewById(R.id.content)
         nowPlaying = findViewById(R.id.nowPlaying)
+        playbackProgress = findViewById(R.id.playbackProgress)
+        playbackTime = findViewById(R.id.playbackTime)
+        pauseButton = findViewById(R.id.pauseButton)
         requestNotificationPermission()
 
         findViewById<Button>(R.id.stopButton).setOnClickListener {
             startService(Intent(this, PlaybackService::class.java).setAction(PlaybackService.ACTION_STOP))
             nowPlaying.text = "Tidak ada audio diputar"
         }
+        pauseButton.setOnClickListener {
+            startService(Intent(this, PlaybackService::class.java).setAction(PlaybackService.ACTION_PAUSE_RESUME))
+        }
+        playbackProgress.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
+                if (fromUser) playbackTime.text = "${durationTime(playbackDuration * progress / 1000)} / ${durationTime(playbackDuration)}"
+            }
+            override fun onStartTrackingTouch(seekBar: SeekBar?) { userSeeking = true }
+            override fun onStopTrackingTouch(seekBar: SeekBar?) {
+                val position = playbackDuration * (seekBar?.progress ?: 0) / 1000
+                startService(Intent(this@MainActivity, PlaybackService::class.java).setAction(PlaybackService.ACTION_SEEK)
+                    .putExtra(PlaybackService.EXTRA_POSITION, position))
+                userSeeking = false
+            }
+        })
 
         findViewById<TabLayout>(R.id.tabs).apply {
             addTab(newTab().setText("Pustaka"))
@@ -78,6 +120,16 @@ class MainActivity : AppCompatActivity() {
         }
         showLibrary()
         AlarmScheduler.scheduleAll(this)
+    }
+
+    override fun onStart() {
+        super.onStart()
+        ContextCompat.registerReceiver(this, playbackReceiver, IntentFilter(PlaybackService.ACTION_STATE), ContextCompat.RECEIVER_NOT_EXPORTED)
+    }
+
+    override fun onStop() {
+        runCatching { unregisterReceiver(playbackReceiver) }
+        super.onStop()
     }
 
     private fun renderTab() = when (selectedTab) {
@@ -269,23 +321,43 @@ class MainActivity : AppCompatActivity() {
         val equalizerValues = (existing?.equalizerBands ?: listOf(0, 0, 0, 0, 0)).toMutableList()
         val equalizerLabels = mutableListOf<TextView>()
         val equalizerSliders = mutableListOf<SeekBar>()
+        val bandRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = android.view.Gravity.CENTER
+        }
         var applyingPreset = false
         frequencies.forEachIndexed { index, frequency ->
-            val bandLabel = label("$frequency: ${formatDb(equalizerValues[index])}")
-            val bandSlider = SeekBar(this).apply {
+            val bandColumn = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                gravity = android.view.Gravity.CENTER
+            }
+            val bandLabel = TextView(this).apply {
+                text = formatDb(equalizerValues[index])
+                textSize = 12f
+                gravity = android.view.Gravity.CENTER
+            }
+            val bandSlider = VerticalSeekBar(this).apply {
                 max = 200
                 progress = equalizerValues[index] + 100
+                layoutParams = LinearLayout.LayoutParams(dp(44), dp(180))
                 setOnSeekBarChangeListener(SimpleSeekListener { progress ->
                     equalizerValues[index] = progress - 100
-                    bandLabel.text = "$frequency: ${formatDb(equalizerValues[index])}"
+                    bandLabel.text = formatDb(equalizerValues[index])
                     if (!applyingPreset && equalizerPreset.selectedItem?.toString() != "Custom") {
                         equalizerPreset.setSelection(equalizerPresets.indexOf("Custom"))
                     }
                 })
             }
+            val frequencyLabel = TextView(this).apply {
+                text = frequency
+                textSize = 11f
+                gravity = android.view.Gravity.CENTER
+            }
             equalizerLabels.add(bandLabel); equalizerSliders.add(bandSlider)
-            equalizerContainer.addView(bandLabel); equalizerContainer.addView(bandSlider)
+            bandColumn.addView(bandLabel); bandColumn.addView(bandSlider); bandColumn.addView(frequencyLabel)
+            bandRow.addView(bandColumn, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
         }
+        equalizerContainer.addView(bandRow)
         var initialEqualizerSelection = true
         equalizerPreset.onItemSelectedListener = SimpleItemSelectedListener {
             if (!initialEqualizerSelection) {
@@ -295,7 +367,7 @@ class MainActivity : AppCompatActivity() {
                     presetValues.forEachIndexed { index, value ->
                         equalizerValues[index] = value
                         equalizerSliders[index].progress = value + 100
-                        equalizerLabels[index].text = "${frequencies[index]}: ${formatDb(value)}"
+                        equalizerLabels[index].text = formatDb(value)
                     }
                     applyingPreset = false
                 }
@@ -436,6 +508,10 @@ class MainActivity : AppCompatActivity() {
 
     private fun time(minutes: Int) = String.format(Locale.getDefault(), "%02d:%02d", minutes / 60, minutes % 60)
     private fun formatDb(value: Int): String = String.format(Locale.getDefault(), "%+.1f dB", value / 10f)
+    private fun durationTime(milliseconds: Int): String {
+        val totalSeconds = (milliseconds.coerceAtLeast(0) / 1000)
+        return String.format(Locale.getDefault(), "%02d:%02d", totalSeconds / 60, totalSeconds % 60)
+    }
     private fun equalizerPresetValues(name: String): List<Int>? = when (name) {
         "Voice" -> listOf(-20, -5, 25, 35, 10)
         "Room" -> listOf(10, 5, 0, 5, 10)
