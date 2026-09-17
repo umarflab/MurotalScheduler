@@ -1,0 +1,5 @@
+<resources>
+    <string name="app_name">Murotal Scheduler</string>
+    <string name="notification_channel">Pemutaran murotal</string>
+    <string name="notification_description">Menampilkan audio yang sedang diputar</string>
+</resources>
