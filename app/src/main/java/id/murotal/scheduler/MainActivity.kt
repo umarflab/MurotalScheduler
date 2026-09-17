@@ -96,14 +96,14 @@ class MainActivity : AppCompatActivity() {
         tracks.forEach { track ->
             content.addView(card(track.title, "Track tunggal", "Putar", {
                 play(listOf(track.uri), track.title)
-            }, "Hapus") {
+            }, "Hapus", {
                 confirmDelete("Hapus track '${track.title}'?") {
                     val updated = store.tracks().filterNot { it.id == track.id }
                     store.saveTracks(updated)
                     store.savePlaylists(store.playlists().map { it.copy(trackIds = it.trackIds.filterNot { id -> id == track.id }) })
                     showLibrary()
                 }
-            })
+            }))
         }
     }
 
@@ -118,12 +118,12 @@ class MainActivity : AppCompatActivity() {
             content.addView(card(playlist.name, "$count track", "Putar", {
                 val uris = store.resolveUris("playlist", playlist.id)
                 if (uris.isEmpty()) toast("Playlist tidak memiliki track yang tersedia") else play(uris, playlist.name)
-            }, "Hapus") {
+            }, "Hapus", {
                 confirmDelete("Hapus playlist '${playlist.name}'?") {
                     store.savePlaylists(store.playlists().filterNot { it.id == playlist.id })
                     showPlaylists()
                 }
-            })
+            }))
         }
     }
 
