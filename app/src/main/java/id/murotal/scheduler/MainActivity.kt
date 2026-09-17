@@ -7,6 +7,7 @@ import android.content.Intent
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.IntentFilter
+import android.content.DialogInterface
 import android.content.pm.PackageManager
 import android.graphics.Typeface
 import android.net.Uri
@@ -28,6 +29,7 @@ import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
+import androidx.core.widget.doAfterTextChanged
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.android.material.tabs.TabLayout
 import java.util.Locale
@@ -154,14 +156,18 @@ class MainActivity : AppCompatActivity() {
         tracks.forEach { track ->
             content.addView(card(track.title, "Track tunggal", "Putar", {
                 play(listOf(track.uri), track.title)
-            }, "Hapus", {
+            }, "Ke playlist", {
+                openAddTrackToPlaylistDialog(track)
+            }, "Hapus") {
                 confirmDelete("Hapus track '${track.title}'?") {
                     val updated = store.tracks().filterNot { it.id == track.id }
                     store.saveTracks(updated)
-                    store.savePlaylists(store.playlists().map { it.copy(trackIds = it.trackIds.filterNot { id -> id == track.id }) })
+                    store.savePlaylists(store.playlists().map {
+                        it.copy(trackIds = it.trackIds.filterNot { id -> id == track.id })
+                    })
                     showLibrary()
                 }
-            }))
+            })
         }
     }
 
@@ -175,13 +181,16 @@ class MainActivity : AppCompatActivity() {
             val count = playlist.trackIds.count { trackMap.containsKey(it) }
             content.addView(card(playlist.name, "$count track", "Putar", {
                 val uris = store.resolveUris("playlist", playlist.id)
-                if (uris.isEmpty()) toast("Playlist tidak memiliki track yang tersedia") else play(uris, playlist.name)
-            }, "Hapus", {
+                if (uris.isEmpty()) toast("Playlist tidak memiliki track yang tersedia")
+                else play(uris, playlist.name)
+            }, "Edit", {
+                openPlaylistDialog(existing = playlist)
+            }, "Hapus") {
                 confirmDelete("Hapus playlist '${playlist.name}'?") {
                     store.savePlaylists(store.playlists().filterNot { it.id == playlist.id })
                     showPlaylists()
                 }
-            }))
+            })
         }
     }
 
@@ -224,31 +233,171 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun openPlaylistDialog() {
+    private fun openAddTrackToPlaylistDialog(track: AudioTrack) {
+        val playlists = store.playlists()
+        if (playlists.isEmpty()) {
+            openPlaylistDialog(initialTrackIds = setOf(track.id))
+            return
+        }
+        val options = playlists.map { it.name } + "Buat playlist baru"
+        MaterialAlertDialogBuilder(this)
+            .setTitle("Masukkan '${track.title}' ke")
+            .setItems(options.toTypedArray()) { _, position ->
+                if (position == playlists.size) {
+                    openPlaylistDialog(initialTrackIds = setOf(track.id))
+                } else {
+                    val selected = playlists[position]
+                    if (track.id in selected.trackIds) {
+                        toast("Track sudah ada di playlist '${selected.name}'")
+                    } else {
+                        store.savePlaylists(
+                            playlists.map {
+                                if (it.id == selected.id) {
+                                    it.copy(trackIds = it.trackIds + track.id)
+                                } else it
+                            }
+                        )
+                        toast("Track ditambahkan ke '${selected.name}'")
+                        renderTab()
+                    }
+                }
+            }
+            .show()
+    }
+
+    private fun openPlaylistDialog(
+        existing: Playlist? = null,
+        initialTrackIds: Set<String> = emptySet()
+    ) {
         val tracks = store.tracks()
         if (tracks.isEmpty()) {
             toast("Tambahkan audio ke Pustaka terlebih dahulu")
             return
         }
+
         val form = verticalContainer()
-        val name = EditText(this).apply { hint = "Nama playlist" }
-        form.addView(name)
-        form.addView(label("Pilih track"))
-        val checks = tracks.map { track ->
-            CheckBox(this).apply { text = track.title; isChecked = true; form.addView(this) }
+        val name = EditText(this).apply {
+            hint = "Nama playlist"
+            setText(existing?.name.orEmpty())
         }
-        MaterialAlertDialogBuilder(this).setTitle("Playlist baru").setView(form)
-            .setNegativeButton("Batal", null).setPositiveButton("Simpan") { _, _ ->
-                val chosen = tracks.filterIndexed { index, _ -> checks[index].isChecked }.map { it.id }
-                if (name.text.isBlank() || chosen.isEmpty()) {
-                    toast("Nama dan minimal satu track wajib diisi")
-                } else {
-                    val items = store.playlists()
-                    items.add(Playlist(UUID.randomUUID().toString(), name.text.toString().trim(), chosen))
-                    store.savePlaylists(items)
-                    showPlaylists()
+        val search = EditText(this).apply {
+            hint = "Cari audio"
+            isSingleLine = true
+        }
+        val selectAll = CheckBox(this).apply {
+            text = "Pilih semua yang tampil"
+        }
+        val selectionInfo = TextView(this).apply {
+            textSize = 13f
+            setTextColor(0xFF53615B.toInt())
+            setPadding(0, 0, 0, dp(6))
+        }
+        val trackContainer = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+        }
+        val trackScroll = ScrollView(this).apply {
+            isFillViewport = false
+            addView(trackContainer)
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                dp(280)
+            )
+        }
+
+        val checks = mutableListOf<CheckBox>()
+        var updatingSelectAll = false
+
+        fun visibleIndexes(): List<Int> =
+            checks.indices.filter { checks[it].visibility == View.VISIBLE }
+
+        fun updateSelectionState() {
+            selectionInfo.text = "${checks.count { it.isChecked }} dari ${tracks.size} track dipilih"
+            if (!updatingSelectAll) {
+                val visible = visibleIndexes()
+                updatingSelectAll = true
+                selectAll.isChecked = visible.isNotEmpty() && visible.all { checks[it].isChecked }
+                updatingSelectAll = false
+            }
+        }
+
+        tracks.forEach { track ->
+            val checked = existing?.trackIds?.contains(track.id)
+                ?: initialTrackIds.contains(track.id)
+            val check = CheckBox(this).apply {
+                text = track.title
+                isChecked = checked
+                setOnCheckedChangeListener { _, _ -> updateSelectionState() }
+            }
+            checks.add(check)
+            trackContainer.addView(check)
+        }
+
+        selectAll.setOnCheckedChangeListener { _, checked ->
+            if (updatingSelectAll) return@setOnCheckedChangeListener
+            updatingSelectAll = true
+            visibleIndexes().forEach { checks[it].isChecked = checked }
+            updatingSelectAll = false
+            updateSelectionState()
+        }
+
+        search.doAfterTextChanged { editable ->
+            val query = editable?.toString()?.trim().orEmpty()
+            tracks.forEachIndexed { index, track ->
+                checks[index].visibility =
+                    if (query.isBlank() || track.title.contains(query, ignoreCase = true)) {
+                        View.VISIBLE
+                    } else {
+                        View.GONE
+                    }
+            }
+            updateSelectionState()
+        }
+
+        form.addView(name)
+        form.addView(search)
+        form.addView(selectAll)
+        form.addView(selectionInfo)
+        form.addView(trackScroll)
+        updateSelectionState()
+
+        val dialog = MaterialAlertDialogBuilder(this)
+            .setTitle(if (existing == null) "Playlist baru" else "Edit playlist")
+            .setView(form)
+            .setNegativeButton("Batal", null)
+            .setPositiveButton("Simpan", null)
+            .create()
+
+        dialog.setOnShowListener {
+            dialog.getButton(DialogInterface.BUTTON_POSITIVE).setOnClickListener {
+                val chosen = tracks.filterIndexed { index, _ -> checks[index].isChecked }
+                    .map { it.id }
+                if (name.text.isBlank()) {
+                    toast("Nama playlist wajib diisi")
+                    return@setOnClickListener
                 }
-            }.show()
+                if (chosen.isEmpty()) {
+                    toast("Pilih minimal satu track")
+                    return@setOnClickListener
+                }
+
+                val items = store.playlists()
+                val updated = Playlist(
+                    existing?.id ?: UUID.randomUUID().toString(),
+                    name.text.toString().trim(),
+                    chosen
+                )
+                if (existing == null) {
+                    items.add(updated)
+                } else {
+                    val position = items.indexOfFirst { it.id == existing.id }
+                    if (position >= 0) items[position] = updated else items.add(updated)
+                }
+                store.savePlaylists(items)
+                dialog.dismiss()
+                renderTab()
+            }
+        }
+        dialog.show()
     }
 
     private fun openScheduleDialog(existing: PlaybackSchedule? = null) {

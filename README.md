@@ -7,6 +7,8 @@ Aplikasi Android offline untuk memutar murotal atau audio lain secara manual dan
 - Impor beberapa berkas audio dari penyimpanan telepon.
 - Putar satu track secara langsung.
 - Buat dan putar playlist dari track yang telah diimpor.
+- Tambahkan track langsung dari Pustaka ke playlist baru atau playlist yang sudah ada.
+- Edit nama dan isi playlist dengan pencarian, pilih semua, dan daftar yang dapat digulir.
 - Jadwalkan waktu mulai dan waktu berhenti setiap hari.
 - Atur volume media untuk setiap jadwal, terpisah dari playlist.
 - Pilih hari aktif dan cara berhenti berdasarkan jam atau akhir audio.
