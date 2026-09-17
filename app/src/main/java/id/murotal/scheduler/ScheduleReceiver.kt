@@ -30,7 +30,13 @@ class ScheduleReceiver : BroadcastReceiver() {
                     putExtra(PlaybackService.EXTRA_EQ_PRESET, schedule.equalizerPreset)
                     putIntegerArrayListExtra(PlaybackService.EXTRA_EQ_BANDS, ArrayList(schedule.equalizerBands))
                 }
-                ContextCompat.startForegroundService(context, service)
+                runCatching { ContextCompat.startForegroundService(context, service) }
+                    .onFailure { error ->
+                        context.sendBroadcast(Intent(PlaybackService.ACTION_STATE).setPackage(context.packageName).apply {
+                            putExtra(PlaybackService.EXTRA_ERROR,
+                                "Layanan pemutaran terjadwal gagal dimulai: ${error.javaClass.simpleName}")
+                        })
+                    }
             }
         } else {
             context.startService(Intent(context, PlaybackService::class.java).setAction(PlaybackService.ACTION_STOP))

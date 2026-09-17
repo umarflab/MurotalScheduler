@@ -53,6 +53,14 @@ class MainActivity : AppCompatActivity() {
             val index = intent.getIntExtra(PlaybackService.EXTRA_QUEUE_INDEX, 0)
             val size = intent.getIntExtra(PlaybackService.EXTRA_QUEUE_SIZE, 0)
             val title = intent.getStringExtra(PlaybackService.EXTRA_TITLE) ?: "Audio"
+            val error = intent.getStringExtra(PlaybackService.EXTRA_ERROR)
+            if (!error.isNullOrBlank()) {
+                nowPlaying.text = "Gagal memutar: $error"
+                playbackProgress.progress = 0
+                playbackTime.text = "00:00 / 00:00"
+                pauseButton.text = "Jeda"
+                return
+            }
             nowPlaying.text = if (size > 1) "$title • Track ${index + 1}/$size" else title
             if (!userSeeking) playbackProgress.progress = if (playbackDuration > 0) position * 1000 / playbackDuration else 0
             playbackTime.text = "${durationTime(position)} / ${durationTime(playbackDuration)}"
@@ -439,8 +447,13 @@ class MainActivity : AppCompatActivity() {
             putStringArrayListExtra(PlaybackService.EXTRA_URIS, ArrayList(uris))
             putExtra(PlaybackService.EXTRA_TITLE, title)
         }
-        ContextCompat.startForegroundService(this, intent)
-        nowPlaying.text = "Sedang diputar: $title"
+        runCatching { ContextCompat.startForegroundService(this, intent) }
+            .onSuccess { nowPlaying.text = "Sedang diputar: $title" }
+            .onFailure {
+                val message = "Layanan pemutaran tidak dapat dimulai: ${it.javaClass.simpleName}"
+                nowPlaying.text = message
+                toast(message)
+            }
     }
 
     private fun chooseTime(current: Int, result: (Int) -> Unit) {

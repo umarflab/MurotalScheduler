@@ -13,6 +13,7 @@ import android.media.audiofx.Equalizer
 import android.media.audiofx.PresetReverb
 import android.net.Uri
 import android.os.IBinder
+import java.io.IOException
 import androidx.core.app.NotificationCompat
 
 class PlaybackService : Service() {
@@ -36,6 +37,7 @@ class PlaybackService : Service() {
         const val EXTRA_PLAYING = "playing"
         const val EXTRA_QUEUE_INDEX = "queue_index"
         const val EXTRA_QUEUE_SIZE = "queue_size"
+        const val EXTRA_ERROR = "error"
         private const val CHANNEL_ID = "murotal_playback"
         private const val NOTIFICATION_ID = 1001
     }
@@ -71,35 +73,45 @@ class PlaybackService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        when (intent?.action) {
-            ACTION_STOP -> stopPlayback()
-            ACTION_PAUSE_RESUME -> {
-                player?.let { if (it.isPlaying) it.pause() else it.start() }
-                broadcastState()
+        try {
+            when (intent?.action) {
+                ACTION_STOP -> stopPlayback()
+                ACTION_PAUSE_RESUME -> {
+                    player?.let { active ->
+                        if (runCatching { active.isPlaying }.getOrDefault(false)) active.pause() else active.start()
+                    }
+                    broadcastState()
+                }
+                ACTION_SEEK -> {
+                    val position = intent.getIntExtra(EXTRA_POSITION, 0)
+                    player?.seekTo(position.coerceAtLeast(0))
+                    broadcastState()
+                }
+                ACTION_PLAY -> {
+                    queue = intent.getStringArrayListExtra(EXTRA_URIS).orEmpty()
+                    if (queue.isEmpty()) {
+                        stopPlayback("Audio tidak ditemukan di Pustaka.")
+                        return START_NOT_STICKY
+                    }
+                    mode = intent.getStringExtra(EXTRA_MODE) ?: if (queue.size == 1) "single" else "sequential"
+                    if (mode == "shuffle_cycle") queue = queue.shuffled()
+                    queueIndex = 0
+                    title = intent.getStringExtra(EXTRA_TITLE) ?: "Murotal"
+                    fadeIn = intent.getBooleanExtra(EXTRA_FADE_IN, false)
+                    fadePending = fadeIn
+                    restoreVolume = intent.getBooleanExtra(EXTRA_RESTORE_VOLUME, false)
+                    eqEnabled = intent.getBooleanExtra(EXTRA_EQ_ENABLED, false)
+                    eqPreset = intent.getStringExtra(EXTRA_EQ_PRESET) ?: "Normal"
+                    eqBands = intent.getIntegerArrayListExtra(EXTRA_EQ_BANDS)?.toList() ?: listOf(0, 0, 0, 0, 0)
+                    setDeviceVolume(intent.getIntExtra(EXTRA_VOLUME, -1), restoreVolume)
+                    startForeground(NOTIFICATION_ID, notification(title))
+                    playCurrent()
+                    stateHandler.removeCallbacks(stateTask)
+                    stateHandler.post(stateTask)
+                }
             }
-            ACTION_SEEK -> {
-                val position = intent.getIntExtra(EXTRA_POSITION, 0)
-                player?.seekTo(position.coerceAtLeast(0))
-                broadcastState()
-            }
-            ACTION_PLAY -> {
-                queue = intent.getStringArrayListExtra(EXTRA_URIS).orEmpty()
-                mode = intent.getStringExtra(EXTRA_MODE) ?: if (queue.size == 1) "single" else "sequential"
-                if (mode == "shuffle_cycle") queue = queue.shuffled()
-                queueIndex = 0
-                title = intent.getStringExtra(EXTRA_TITLE) ?: "Murotal"
-                fadeIn = intent.getBooleanExtra(EXTRA_FADE_IN, false)
-                fadePending = fadeIn
-                restoreVolume = intent.getBooleanExtra(EXTRA_RESTORE_VOLUME, false)
-                eqEnabled = intent.getBooleanExtra(EXTRA_EQ_ENABLED, false)
-                eqPreset = intent.getStringExtra(EXTRA_EQ_PRESET) ?: "Normal"
-                eqBands = intent.getIntegerArrayListExtra(EXTRA_EQ_BANDS)?.toList() ?: listOf(0, 0, 0, 0, 0)
-                setDeviceVolume(intent.getIntExtra(EXTRA_VOLUME, -1), restoreVolume)
-                startForeground(NOTIFICATION_ID, notification(title))
-                playCurrent()
-                stateHandler.removeCallbacks(stateTask)
-                stateHandler.post(stateTask)
-            }
+        } catch (error: Throwable) {
+            stopPlayback(readableError(error))
         }
         return START_NOT_STICKY
     }
@@ -113,17 +125,23 @@ class PlaybackService : Service() {
     }
 
     private fun playCurrent() {
-        player?.release()
+        releasePlayer()
         releaseAudioEffects()
         if (queueIndex !in queue.indices) {
             stopPlayback()
             return
         }
-        player = MediaPlayer().apply {
-            setAudioAttributes(AudioAttributes.Builder().setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
-                .setUsage(AudioAttributes.USAGE_MEDIA).build())
-            setDataSource(applicationContext, Uri.parse(queue[queueIndex]))
-            setOnPreparedListener {
+
+        val activePlayer = MediaPlayer()
+        player = activePlayer
+        try {
+            activePlayer.setAudioAttributes(
+                AudioAttributes.Builder().setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
+                    .setUsage(AudioAttributes.USAGE_MEDIA).build()
+            )
+            setPlayerDataSource(activePlayer, queue[queueIndex])
+            activePlayer.setOnPreparedListener {
+                if (player !== it) return@setOnPreparedListener
                 applyAudioEffects(it)
                 if (fadePending) {
                     fadePending = false
@@ -134,22 +152,51 @@ class PlaybackService : Service() {
                     it.setVolume(targetPlayerVolume, targetPlayerVolume)
                     it.start()
                 }
+                broadcastState()
             }
-            setOnCompletionListener {
+            activePlayer.setOnCompletionListener {
+                if (player !== it) return@setOnCompletionListener
                 queueIndex++
                 if (mode == "shuffle_cycle" && queueIndex >= queue.size) {
                     queue = queue.shuffled()
                     queueIndex = 0
                 }
-                playCurrent()
+                if (queueIndex in queue.indices) playCurrent() else stopPlayback()
             }
-            setOnErrorListener { _, _, _ ->
-                queueIndex++
-                playCurrent()
+            activePlayer.setOnErrorListener { mediaPlayer, what, extra ->
+                if (player === mediaPlayer) {
+                    stopPlayback("Audio gagal diputar (kode $what/$extra). Impor ulang file jika masalah berulang.")
+                }
                 true
             }
-            prepareAsync()
+            activePlayer.prepareAsync()
+        } catch (error: Throwable) {
+            stopPlayback(readableError(error))
         }
+    }
+
+    private fun setPlayerDataSource(activePlayer: MediaPlayer, source: String) {
+        val uri = Uri.parse(source)
+        if (uri.scheme == "content") {
+            val descriptor = contentResolver.openAssetFileDescriptor(uri, "r")
+                ?: throw IOException("Android tidak dapat membuka file audio.")
+            descriptor.use {
+                if (it.declaredLength >= 0) {
+                    activePlayer.setDataSource(it.fileDescriptor, it.startOffset, it.declaredLength)
+                } else {
+                    activePlayer.setDataSource(it.fileDescriptor)
+                }
+            }
+        } else {
+            activePlayer.setDataSource(applicationContext, uri)
+        }
+    }
+
+    private fun readableError(error: Throwable): String = when (error) {
+        is SecurityException -> "Izin membaca file audio ditolak. Hapus track dari Pustaka lalu impor kembali."
+        is IOException -> "File audio tidak dapat dibuka. Pastikan file masih tersedia dan formatnya didukung."
+        is IllegalStateException -> "Pemutar audio berada dalam keadaan yang tidak valid. Coba putar kembali."
+        else -> "Pemutaran gagal: ${error.javaClass.simpleName}."
     }
 
     private fun applyAudioEffects(activePlayer: MediaPlayer) {
@@ -188,7 +235,7 @@ class PlaybackService : Service() {
         }
     }
 
-    private fun broadcastState() {
+    private fun broadcastState(errorMessage: String? = null) {
         val active = player
         val state = Intent(ACTION_STATE).setPackage(packageName).apply {
             putExtra(EXTRA_TITLE, title)
@@ -197,6 +244,7 @@ class PlaybackService : Service() {
             putExtra(EXTRA_PLAYING, runCatching { active?.isPlaying ?: false }.getOrDefault(false))
             putExtra(EXTRA_QUEUE_INDEX, queueIndex)
             putExtra(EXTRA_QUEUE_SIZE, queue.size)
+            putExtra(EXTRA_ERROR, errorMessage)
         }
         sendBroadcast(state)
     }
@@ -233,11 +281,16 @@ class PlaybackService : Service() {
             Intent(this, PlaybackService::class.java).setAction(ACTION_STOP), PendingIntent.FLAG_IMMUTABLE))
         .build()
 
-    private fun stopPlayback() {
-        stateHandler.removeCallbacks(stateTask)
-        player?.stop()
-        player?.release()
+    private fun releasePlayer() {
+        val activePlayer = player
         player = null
+        runCatching { activePlayer?.reset() }
+        runCatching { activePlayer?.release() }
+    }
+
+    private fun stopPlayback(errorMessage: String? = null) {
+        stateHandler.removeCallbacks(stateTask)
+        releasePlayer()
         releaseAudioEffects()
         if (restoreVolume) {
             previousVolume?.let { saved ->
@@ -249,15 +302,14 @@ class PlaybackService : Service() {
         restoreVolume = false
         queue = emptyList()
         queueIndex = 0
-        broadcastState()
+        broadcastState(errorMessage)
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
     }
 
     override fun onDestroy() {
         stateHandler.removeCallbacks(stateTask)
-        player?.release()
-        player = null
+        releasePlayer()
         releaseAudioEffects()
         super.onDestroy()
     }
