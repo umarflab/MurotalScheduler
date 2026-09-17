@@ -51,7 +51,11 @@ class AppStore(context: Context) {
                 item.optString("stopMode", "time"),
                 item.optJSONArray("days")?.let { days -> List(days.length()) { days.getInt(it) } }
                     ?: listOf(1, 2, 3, 4, 5, 6, 7),
-                item.optBoolean("fadeIn", false), item.optBoolean("enabled", true)
+                item.optBoolean("fadeIn", false), item.optBoolean("equalizerEnabled", false),
+                item.optString("equalizerPreset", "Normal"),
+                item.optJSONArray("equalizerBands")?.let { bands ->
+                    if (bands.length() == 5) List(5) { bands.getInt(it) } else listOf(0, 0, 0, 0, 0)
+                } ?: listOf(0, 0, 0, 0, 0), item.optBoolean("enabled", true)
             )
         }
     }.getOrDefault(mutableListOf())
@@ -64,7 +68,9 @@ class AppStore(context: Context) {
                 .put("startMinutes", schedule.startMinutes).put("endMinutes", schedule.endMinutes)
                 .put("volumePercent", schedule.volumePercent).put("playbackMode", schedule.playbackMode)
                 .put("stopMode", schedule.stopMode).put("days", JSONArray(schedule.days))
-                .put("fadeIn", schedule.fadeIn).put("enabled", schedule.enabled))
+                .put("fadeIn", schedule.fadeIn).put("equalizerEnabled", schedule.equalizerEnabled)
+                .put("equalizerPreset", schedule.equalizerPreset)
+                .put("equalizerBands", JSONArray(schedule.equalizerBands)).put("enabled", schedule.enabled))
         }
         prefs.edit().putString("schedules", array.toString()).apply()
     }
@@ -85,20 +91,4 @@ class AppStore(context: Context) {
         playlists().firstOrNull { it.id == id }?.name ?: "Playlist tidak ditemukan"
     }
 
-    fun equalizer(): EqualizerSettings = runCatching {
-        val item = JSONObject(prefs.getString("equalizer", "{}") ?: "{}")
-        val values = item.optJSONArray("bands")
-        EqualizerSettings(
-            item.optBoolean("enabled", false),
-            item.optString("preset", "Normal"),
-            if (values != null && values.length() == 5) List(5) { values.getInt(it) }
-            else listOf(0, 0, 0, 0, 0)
-        )
-    }.getOrDefault(EqualizerSettings())
-
-    fun saveEqualizer(settings: EqualizerSettings) {
-        val item = JSONObject().put("enabled", settings.enabled).put("preset", settings.preset)
-            .put("bands", JSONArray(settings.bands))
-        prefs.edit().putString("equalizer", item.toString()).apply()
-    }
 }

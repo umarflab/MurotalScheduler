@@ -20,6 +20,9 @@ class ScheduleReceiver : BroadcastReceiver() {
                     putExtra(PlaybackService.EXTRA_MODE, schedule.playbackMode)
                     putExtra(PlaybackService.EXTRA_FADE_IN, schedule.fadeIn)
                     putExtra(PlaybackService.EXTRA_RESTORE_VOLUME, true)
+                    putExtra(PlaybackService.EXTRA_EQ_ENABLED, schedule.equalizerEnabled)
+                    putExtra(PlaybackService.EXTRA_EQ_PRESET, schedule.equalizerPreset)
+                    putIntegerArrayListExtra(PlaybackService.EXTRA_EQ_BANDS, ArrayList(schedule.equalizerBands))
                 }
                 ContextCompat.startForegroundService(context, service)
             }

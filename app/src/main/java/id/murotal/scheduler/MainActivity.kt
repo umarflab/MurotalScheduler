@@ -67,7 +67,6 @@ class MainActivity : AppCompatActivity() {
             addTab(newTab().setText("Pustaka"))
             addTab(newTab().setText("Playlist"))
             addTab(newTab().setText("Jadwal"))
-            addTab(newTab().setText("Equalizer"))
             addOnTabSelectedListener(object : TabLayout.OnTabSelectedListener {
                 override fun onTabSelected(tab: TabLayout.Tab) {
                     selectedTab = tab.position
@@ -84,8 +83,7 @@ class MainActivity : AppCompatActivity() {
     private fun renderTab() = when (selectedTab) {
         0 -> showLibrary()
         1 -> showPlaylists()
-        2 -> showSchedules()
-        else -> showEqualizer()
+        else -> showSchedules()
     }
 
     private fun showLibrary() {
@@ -147,7 +145,8 @@ class MainActivity : AppCompatActivity() {
             val stopName = if (schedule.stopMode == "time") "${time(schedule.startMinutes)}–${time(schedule.endMinutes)}" else "${time(schedule.startMinutes)}–selesai"
             val dayName = daySummary(schedule.days)
             val fade = if (schedule.fadeIn) " • Fade-in" else ""
-            val detail = "$dayName • $stopName\n$modeName • Volume ${schedule.volumePercent}%$fade • $status\n${store.targetName(schedule.targetType, schedule.targetId)}"
+            val equalizerName = if (schedule.equalizerEnabled) " • EQ ${schedule.equalizerPreset}" else ""
+            val detail = "$dayName • $stopName\n$modeName • Volume ${schedule.volumePercent}%$fade$equalizerName • $status\n${store.targetName(schedule.targetType, schedule.targetId)}"
             content.addView(card(schedule.name, detail, "Edit", {
                 openScheduleDialog(schedule)
             }, if (schedule.enabled) "Nonaktifkan" else "Aktifkan", {
@@ -255,6 +254,59 @@ class MainActivity : AppCompatActivity() {
             text = "Fade-in 10 detik saat jadwal dimulai"
             isChecked = existing?.fadeIn ?: false
         }
+        val equalizerCheck = CheckBox(this).apply {
+            text = "Aktifkan equalizer untuk jadwal ini"
+            isChecked = existing?.equalizerEnabled ?: false
+        }
+        val equalizerContainer = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        val equalizerPresets = listOf("Normal", "Voice", "Room", "Concert", "Ballroom", "Hall", "Plate", "Custom")
+        val equalizerPreset = Spinner(this).apply {
+            adapter = ArrayAdapter(this@MainActivity, android.R.layout.simple_spinner_dropdown_item, equalizerPresets)
+        }
+        equalizerContainer.addView(label("Preset equalizer dan efek ruang"))
+        equalizerContainer.addView(equalizerPreset)
+        val frequencies = listOf("60 Hz", "230 Hz", "910 Hz", "3,6 kHz", "14 kHz")
+        val equalizerValues = (existing?.equalizerBands ?: listOf(0, 0, 0, 0, 0)).toMutableList()
+        val equalizerLabels = mutableListOf<TextView>()
+        val equalizerSliders = mutableListOf<SeekBar>()
+        var applyingPreset = false
+        frequencies.forEachIndexed { index, frequency ->
+            val bandLabel = label("$frequency: ${formatDb(equalizerValues[index])}")
+            val bandSlider = SeekBar(this).apply {
+                max = 200
+                progress = equalizerValues[index] + 100
+                setOnSeekBarChangeListener(SimpleSeekListener { progress ->
+                    equalizerValues[index] = progress - 100
+                    bandLabel.text = "$frequency: ${formatDb(equalizerValues[index])}"
+                    if (!applyingPreset && equalizerPreset.selectedItem?.toString() != "Custom") {
+                        equalizerPreset.setSelection(equalizerPresets.indexOf("Custom"))
+                    }
+                })
+            }
+            equalizerLabels.add(bandLabel); equalizerSliders.add(bandSlider)
+            equalizerContainer.addView(bandLabel); equalizerContainer.addView(bandSlider)
+        }
+        var initialEqualizerSelection = true
+        equalizerPreset.onItemSelectedListener = SimpleItemSelectedListener {
+            if (!initialEqualizerSelection) {
+                val presetValues = equalizerPresetValues(equalizerPreset.selectedItem.toString())
+                if (presetValues != null) {
+                    applyingPreset = true
+                    presetValues.forEachIndexed { index, value ->
+                        equalizerValues[index] = value
+                        equalizerSliders[index].progress = value + 100
+                        equalizerLabels[index].text = "${frequencies[index]}: ${formatDb(value)}"
+                    }
+                    applyingPreset = false
+                }
+            }
+        }
+        equalizerPreset.setSelection(equalizerPresets.indexOf(existing?.equalizerPreset ?: "Normal").coerceAtLeast(0))
+        equalizerPreset.post { initialEqualizerSelection = false }
+        equalizerContainer.visibility = if (equalizerCheck.isChecked) View.VISIBLE else View.GONE
+        equalizerCheck.setOnCheckedChangeListener { _, checked ->
+            equalizerContainer.visibility = if (checked) View.VISIBLE else View.GONE
+        }
         form.addView(name)
         form.addView(daysTitle); form.addView(dayRow)
         form.addView(label("Jenis sumber")); form.addView(typeSpinner)
@@ -264,6 +316,8 @@ class MainActivity : AppCompatActivity() {
         form.addView(label("Cara berhenti")); form.addView(stopSpinner); form.addView(endButton)
         form.addView(volumeLabel); form.addView(volume)
         form.addView(fadeCheck)
+        form.addView(equalizerCheck)
+        form.addView(equalizerContainer)
         if (existing != null) {
             typeSpinner.setSelection(if (existing.targetType == "track") 0 else 1)
         }
@@ -293,7 +347,8 @@ class MainActivity : AppCompatActivity() {
                 val item = PlaybackSchedule(existing?.id ?: UUID.randomUUID().toString(), name.text.toString().trim(),
                     if (isTrack) "track" else "playlist", targetId, startMinutes, endMinutes, volume.progress,
                     playbackMode, if (stopSpinner.selectedItemPosition == 0) "time" else "after_source",
-                    selectedDays, fadeCheck.isChecked, existing?.enabled ?: true)
+                    selectedDays, fadeCheck.isChecked, equalizerCheck.isChecked,
+                    equalizerPreset.selectedItem.toString(), equalizerValues.toList(), existing?.enabled ?: true)
                 val schedules = store.schedules()
                 if (existing == null) schedules.add(item) else {
                     AlarmScheduler.cancel(this, existing.id)
@@ -304,81 +359,6 @@ class MainActivity : AppCompatActivity() {
                 AlarmScheduler.schedule(this, item)
                 showSchedules()
             }.show()
-    }
-
-    private fun showEqualizer() {
-        content.removeAllViews()
-        val saved = store.equalizer()
-        val enabled = CheckBox(this).apply {
-            text = "Aktifkan equalizer dan efek ruang"
-            isChecked = saved.enabled
-            textSize = 16f
-        }
-        content.addView(enabled)
-        content.addView(label("Preset efek"))
-        val presets = listOf("Normal", "Voice", "Room", "Concert", "Ballroom", "Hall", "Plate", "Custom")
-        val presetSpinner = Spinner(this).apply {
-            adapter = ArrayAdapter(this@MainActivity, android.R.layout.simple_spinner_dropdown_item, presets)
-        }
-        content.addView(presetSpinner)
-        content.addView(emptyText("Room, Concert, Ballroom, Hall, dan Plate menggabungkan equalizer dengan reverb sistem Android. Hasilnya bergantung pada perangkat dan speaker."))
-
-        val frequencies = listOf("60 Hz", "230 Hz", "910 Hz", "3,6 kHz", "14 kHz")
-        val values = saved.bands.toMutableList()
-        val valueLabels = mutableListOf<TextView>()
-        val sliders = mutableListOf<SeekBar>()
-        var applyingPreset = false
-        frequencies.forEachIndexed { index, frequency ->
-            val valueLabel = label("$frequency: ${formatDb(values[index])}")
-            val slider = SeekBar(this).apply {
-                max = 200
-                progress = values[index] + 100
-                setOnSeekBarChangeListener(SimpleSeekListener { progress ->
-                    values[index] = progress - 100
-                    valueLabel.text = "$frequency: ${formatDb(values[index])}"
-                    if (!applyingPreset && presetSpinner.selectedItem?.toString() != "Custom") {
-                        presetSpinner.setSelection(presets.indexOf("Custom"))
-                    }
-                })
-            }
-            valueLabels.add(valueLabel)
-            sliders.add(slider)
-            content.addView(valueLabel)
-            content.addView(slider)
-        }
-
-        fun applyPreset(name: String) {
-            val presetValues = when (name) {
-                "Voice" -> listOf(-20, -5, 25, 35, 10)
-                "Room" -> listOf(10, 5, 0, 5, 10)
-                "Concert" -> listOf(15, 5, -5, 10, 20)
-                "Ballroom" -> listOf(10, 10, 0, 10, 15)
-                "Hall" -> listOf(5, 0, -5, 10, 20)
-                "Plate" -> listOf(0, 5, 5, 10, 10)
-                "Normal" -> listOf(0, 0, 0, 0, 0)
-                else -> return
-            }
-            applyingPreset = true
-            presetValues.forEachIndexed { index, value ->
-                values[index] = value
-                sliders[index].progress = value + 100
-                valueLabels[index].text = "${frequencies[index]}: ${formatDb(value)}"
-            }
-            applyingPreset = false
-        }
-
-        var initialSelection = true
-        presetSpinner.onItemSelectedListener = SimpleItemSelectedListener {
-            if (!initialSelection) applyPreset(presetSpinner.selectedItem.toString())
-        }
-        presetSpinner.setSelection(presets.indexOf(saved.preset).coerceAtLeast(0))
-        presetSpinner.post { initialSelection = false }
-
-        content.addView(primaryButton("Simpan pengaturan equalizer") {
-            store.saveEqualizer(EqualizerSettings(enabled.isChecked, presetSpinner.selectedItem.toString(), values.toList()))
-            toast("Pengaturan disimpan dan berlaku pada pemutaran berikutnya")
-        })
-        content.addView(emptyText("Gunakan peningkatan frekuensi secara bertahap. Pengaturan ekstrem dapat menyebabkan suara pecah pada speaker telepon."))
     }
 
     private fun play(uris: List<String>, title: String) {
@@ -456,6 +436,16 @@ class MainActivity : AppCompatActivity() {
 
     private fun time(minutes: Int) = String.format(Locale.getDefault(), "%02d:%02d", minutes / 60, minutes % 60)
     private fun formatDb(value: Int): String = String.format(Locale.getDefault(), "%+.1f dB", value / 10f)
+    private fun equalizerPresetValues(name: String): List<Int>? = when (name) {
+        "Voice" -> listOf(-20, -5, 25, 35, 10)
+        "Room" -> listOf(10, 5, 0, 5, 10)
+        "Concert" -> listOf(15, 5, -5, 10, 20)
+        "Ballroom" -> listOf(10, 10, 0, 10, 15)
+        "Hall" -> listOf(5, 0, -5, 10, 20)
+        "Plate" -> listOf(0, 5, 5, 10, 10)
+        "Normal" -> listOf(0, 0, 0, 0, 0)
+        else -> null
+    }
     private fun daySummary(days: List<Int>): String {
         if (days.size == 7) return "Setiap hari"
         val labels = mapOf(1 to "Min", 2 to "Sen", 3 to "Sel", 4 to "Rab", 5 to "Kam", 6 to "Jum", 7 to "Sab")

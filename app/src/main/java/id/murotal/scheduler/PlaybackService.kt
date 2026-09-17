@@ -25,6 +25,9 @@ class PlaybackService : Service() {
         const val EXTRA_MODE = "mode"
         const val EXTRA_FADE_IN = "fade_in"
         const val EXTRA_RESTORE_VOLUME = "restore_volume"
+        const val EXTRA_EQ_ENABLED = "eq_enabled"
+        const val EXTRA_EQ_PRESET = "eq_preset"
+        const val EXTRA_EQ_BANDS = "eq_bands"
         private const val CHANNEL_ID = "murotal_playback"
         private const val NOTIFICATION_ID = 1001
     }
@@ -41,6 +44,9 @@ class PlaybackService : Service() {
     private var targetPlayerVolume = 1f
     private var equalizer: Equalizer? = null
     private var reverb: PresetReverb? = null
+    private var eqEnabled = false
+    private var eqPreset = "Normal"
+    private var eqBands: List<Int> = listOf(0, 0, 0, 0, 0)
 
     override fun onCreate() {
         super.onCreate()
@@ -61,6 +67,9 @@ class PlaybackService : Service() {
                 fadeIn = intent.getBooleanExtra(EXTRA_FADE_IN, false)
                 fadePending = fadeIn
                 restoreVolume = intent.getBooleanExtra(EXTRA_RESTORE_VOLUME, false)
+                eqEnabled = intent.getBooleanExtra(EXTRA_EQ_ENABLED, false)
+                eqPreset = intent.getStringExtra(EXTRA_EQ_PRESET) ?: "Normal"
+                eqBands = intent.getIntegerArrayListExtra(EXTRA_EQ_BANDS)?.toList() ?: listOf(0, 0, 0, 0, 0)
                 setDeviceVolume(intent.getIntExtra(EXTRA_VOLUME, -1), restoreVolume)
                 startForeground(NOTIFICATION_ID, notification(title))
                 playCurrent()
@@ -118,8 +127,7 @@ class PlaybackService : Service() {
     }
 
     private fun applyAudioEffects(sessionId: Int) {
-        val settings = AppStore(this).equalizer()
-        if (!settings.enabled) return
+        if (!eqEnabled) return
         runCatching {
             equalizer = Equalizer(0, sessionId).apply {
                 val range = bandLevelRange
@@ -128,14 +136,14 @@ class PlaybackService : Service() {
                 val count = numberOfBands.toInt().coerceAtLeast(1)
                 for (band in 0 until count) {
                     val source = if (count == 1) 2 else (band * 4f / (count - 1)).toInt().coerceIn(0, 4)
-                    val percent = settings.bands.getOrElse(source) { 0 }.coerceIn(-100, 100)
+                    val percent = eqBands.getOrElse(source) { 0 }.coerceIn(-100, 100)
                     val level = if (percent >= 0) percent * maximum / 100 else -percent * minimum / 100
                     setBandLevel(band.toShort(), level.coerceIn(minimum, maximum).toShort())
                 }
                 enabled = true
             }
         }
-        val reverbPreset = when (settings.preset) {
+        val reverbPreset = when (eqPreset) {
             "Room" -> PresetReverb.PRESET_SMALLROOM
             "Concert" -> PresetReverb.PRESET_LARGEHALL
             "Ballroom" -> PresetReverb.PRESET_MEDIUMHALL
