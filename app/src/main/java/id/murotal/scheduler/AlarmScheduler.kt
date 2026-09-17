@@ -19,7 +19,7 @@ object AlarmScheduler {
         cancel(context, item.id)
         if (!item.enabled) return
         setDaily(context, item, true)
-        setDaily(context, item, false)
+        if (item.stopMode == "time") setDaily(context, item, false)
     }
 
     fun cancel(context: Context, id: String) {
@@ -31,19 +31,32 @@ object AlarmScheduler {
     private fun setDaily(context: Context, item: PlaybackSchedule, start: Boolean) {
         val manager = context.getSystemService(AlarmManager::class.java)
         val minutes = if (start) item.startMinutes else item.endMinutes
-        val trigger = Calendar.getInstance().apply {
-            set(Calendar.HOUR_OF_DAY, minutes / 60)
-            set(Calendar.MINUTE, minutes % 60)
-            set(Calendar.SECOND, 0)
-            set(Calendar.MILLISECOND, 0)
-            if (timeInMillis <= System.currentTimeMillis()) add(Calendar.DAY_OF_YEAR, 1)
-        }.timeInMillis
+        val trigger = nextTrigger(item, minutes, start)
         val operation = pendingIntent(context, item.id, start)
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S || manager.canScheduleExactAlarms()) {
             manager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, trigger, operation)
         } else {
             manager.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, trigger, operation)
         }
+    }
+
+    private fun nextTrigger(item: PlaybackSchedule, minutes: Int, start: Boolean): Long {
+        val now = System.currentTimeMillis()
+        val overnightStop = !start && item.endMinutes <= item.startMinutes
+        for (offset in 0..8) {
+            val candidate = Calendar.getInstance().apply {
+                add(Calendar.DAY_OF_YEAR, offset)
+                set(Calendar.HOUR_OF_DAY, minutes / 60)
+                set(Calendar.MINUTE, minutes % 60)
+                set(Calendar.SECOND, 0)
+                set(Calendar.MILLISECOND, 0)
+            }
+            val sourceDay = (candidate.clone() as Calendar).apply {
+                if (overnightStop) add(Calendar.DAY_OF_YEAR, -1)
+            }.get(Calendar.DAY_OF_WEEK)
+            if (sourceDay in item.days && candidate.timeInMillis > now) return candidate.timeInMillis
+        }
+        return now + 24 * 60 * 60 * 1000L
     }
 
     private fun pendingIntent(context: Context, id: String, start: Boolean): PendingIntent {

@@ -46,7 +46,12 @@ class AppStore(context: Context) {
             PlaybackSchedule(
                 item.getString("id"), item.getString("name"), item.getString("targetType"),
                 item.getString("targetId"), item.getInt("startMinutes"), item.getInt("endMinutes"),
-                item.getInt("volumePercent"), item.optBoolean("enabled", true)
+                item.getInt("volumePercent"), item.optString("playbackMode",
+                    if (item.getString("targetType") == "track") "single" else "sequential"),
+                item.optString("stopMode", "time"),
+                item.optJSONArray("days")?.let { days -> List(days.length()) { days.getInt(it) } }
+                    ?: listOf(1, 2, 3, 4, 5, 6, 7),
+                item.optBoolean("fadeIn", false), item.optBoolean("enabled", true)
             )
         }
     }.getOrDefault(mutableListOf())
@@ -57,7 +62,9 @@ class AppStore(context: Context) {
             array.put(JSONObject().put("id", schedule.id).put("name", schedule.name)
                 .put("targetType", schedule.targetType).put("targetId", schedule.targetId)
                 .put("startMinutes", schedule.startMinutes).put("endMinutes", schedule.endMinutes)
-                .put("volumePercent", schedule.volumePercent).put("enabled", schedule.enabled))
+                .put("volumePercent", schedule.volumePercent).put("playbackMode", schedule.playbackMode)
+                .put("stopMode", schedule.stopMode).put("days", JSONArray(schedule.days))
+                .put("fadeIn", schedule.fadeIn).put("enabled", schedule.enabled))
         }
         prefs.edit().putString("schedules", array.toString()).apply()
     }

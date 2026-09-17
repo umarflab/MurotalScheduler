@@ -9,6 +9,9 @@ Aplikasi Android offline untuk memutar murotal atau audio lain secara manual dan
 - Buat dan putar playlist dari track yang telah diimpor.
 - Jadwalkan waktu mulai dan waktu berhenti setiap hari.
 - Atur volume media untuk setiap jadwal, terpisah dari playlist.
+- Pilih hari aktif dan cara berhenti berdasarkan jam atau akhir audio.
+- Gunakan mode Single, Sequential, atau Shuffle Cycle pada setiap jadwal.
+- Terapkan fade-in 10 detik dan pulihkan volume media sebelumnya setelah jadwal selesai.
 - Pulihkan jadwal setelah telepon dinyalakan ulang.
 - Berjalan tanpa koneksi internet.
 

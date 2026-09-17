@@ -19,6 +19,7 @@ import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.SeekBar
 import android.widget.Spinner
+import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
@@ -136,7 +137,15 @@ class MainActivity : AppCompatActivity() {
         if (schedules.isEmpty()) content.addView(emptyText("Belum ada jadwal. Setiap jadwal memiliki sumber audio, waktu mulai, waktu berhenti, dan volume sendiri."))
         schedules.forEach { schedule ->
             val status = if (schedule.enabled) "Aktif" else "Nonaktif"
-            val detail = "${time(schedule.startMinutes)}–${time(schedule.endMinutes)}  •  Volume ${schedule.volumePercent}%  •  $status\n${store.targetName(schedule.targetType, schedule.targetId)}"
+            val modeName = when (schedule.playbackMode) {
+                "shuffle_cycle" -> "Shuffle Cycle"
+                "sequential" -> "Sequential"
+                else -> "Single"
+            }
+            val stopName = if (schedule.stopMode == "time") "${time(schedule.startMinutes)}–${time(schedule.endMinutes)}" else "${time(schedule.startMinutes)}–selesai"
+            val dayName = daySummary(schedule.days)
+            val fade = if (schedule.fadeIn) " • Fade-in" else ""
+            val detail = "$dayName • $stopName\n$modeName • Volume ${schedule.volumePercent}%$fade • $status\n${store.targetName(schedule.targetType, schedule.targetId)}"
             content.addView(card(schedule.name, detail, if (schedule.enabled) "Nonaktifkan" else "Aktifkan", {
                 val changed = schedule.copy(enabled = !schedule.enabled)
                 store.saveSchedules(store.schedules().map { if (it.id == schedule.id) changed else it })
@@ -192,13 +201,24 @@ class MainActivity : AppCompatActivity() {
         val typeLabels = if (playlists.isEmpty()) listOf("Track tunggal") else listOf("Track tunggal", "Playlist")
         typeSpinner.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, typeLabels)
         val targetSpinner = Spinner(this)
+        val modeSpinner = Spinner(this)
         fun refreshTargets() {
-            val labels = if (typeSpinner.selectedItemPosition == 0) tracks.map { it.title } else playlists.map { it.name }
+            val isTrack = typeSpinner.selectedItemPosition == 0
+            val labels = if (isTrack) tracks.map { it.title } else playlists.map { it.name }
             targetSpinner.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, labels)
+            val modes = if (isTrack) listOf("Single") else listOf("Sequential", "Shuffle Cycle")
+            modeSpinner.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, modes)
         }
         typeSpinner.onItemSelectedListener = SimpleItemSelectedListener { refreshTargets() }
         val startButton = Button(this).apply { text = "Mulai: 05:00" }
         val endButton = Button(this).apply { text = "Berhenti: 06:00" }
+        val stopSpinner = Spinner(this).apply {
+            adapter = ArrayAdapter(this@MainActivity, android.R.layout.simple_spinner_dropdown_item,
+                listOf("Berhenti pada jam tertentu", "Berhenti setelah audio selesai"))
+            onItemSelectedListener = SimpleItemSelectedListener {
+                endButton.visibility = if (selectedItemPosition == 0) View.VISIBLE else View.GONE
+            }
+        }
         var startMinutes = 300
         var endMinutes = 360
         startButton.setOnClickListener { chooseTime(startMinutes) { startMinutes = it; startButton.text = "Mulai: ${time(it)}" } }
@@ -209,14 +229,32 @@ class MainActivity : AppCompatActivity() {
             progress = 60
             setOnSeekBarChangeListener(SimpleSeekListener { volumeLabel.text = "Volume: $it%" })
         }
+        val daysTitle = label("Hari pemutaran")
+        val dayRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        val dayValues = listOf(2, 3, 4, 5, 6, 7, 1)
+        val dayLabels = listOf("Sen", "Sel", "Rab", "Kam", "Jum", "Sab", "Min")
+        val dayChecks = dayValues.mapIndexed { index, _ ->
+            CheckBox(this).apply {
+                text = dayLabels[index]
+                isChecked = true
+                buttonTintList = null
+                dayRow.addView(this, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+            }
+        }
+        val fadeCheck = CheckBox(this).apply { text = "Fade-in 10 detik saat jadwal dimulai" }
         form.addView(name)
+        form.addView(daysTitle); form.addView(dayRow)
         form.addView(label("Jenis sumber")); form.addView(typeSpinner)
         form.addView(label("Audio atau playlist")); form.addView(targetSpinner)
-        form.addView(startButton); form.addView(endButton)
+        form.addView(label("Mode pemutaran")); form.addView(modeSpinner)
+        form.addView(startButton)
+        form.addView(label("Cara berhenti")); form.addView(stopSpinner); form.addView(endButton)
         form.addView(volumeLabel); form.addView(volume)
+        form.addView(fadeCheck)
         refreshTargets()
 
-        MaterialAlertDialogBuilder(this).setTitle("Jadwal baru").setView(form)
+        val scroll = ScrollView(this).apply { addView(form) }
+        MaterialAlertDialogBuilder(this).setTitle("Jadwal baru").setView(scroll)
             .setNegativeButton("Batal", null).setPositiveButton("Simpan") { _, _ ->
                 if (name.text.isBlank()) {
                     toast("Nama jadwal wajib diisi")
@@ -224,8 +262,16 @@ class MainActivity : AppCompatActivity() {
                 }
                 val isTrack = typeSpinner.selectedItemPosition == 0
                 val targetId = if (isTrack) tracks[targetSpinner.selectedItemPosition].id else playlists[targetSpinner.selectedItemPosition].id
+                val selectedDays = dayValues.filterIndexed { index, _ -> dayChecks[index].isChecked }
+                if (selectedDays.isEmpty()) {
+                    toast("Pilih minimal satu hari")
+                    return@setPositiveButton
+                }
+                val playbackMode = if (isTrack) "single" else if (modeSpinner.selectedItemPosition == 0) "sequential" else "shuffle_cycle"
                 val item = PlaybackSchedule(UUID.randomUUID().toString(), name.text.toString().trim(),
-                    if (isTrack) "track" else "playlist", targetId, startMinutes, endMinutes, volume.progress)
+                    if (isTrack) "track" else "playlist", targetId, startMinutes, endMinutes, volume.progress,
+                    playbackMode, if (stopSpinner.selectedItemPosition == 0) "time" else "after_source",
+                    selectedDays, fadeCheck.isChecked)
                 val schedules = store.schedules(); schedules.add(item); store.saveSchedules(schedules)
                 AlarmScheduler.schedule(this, item)
                 showSchedules()
@@ -304,6 +350,11 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun time(minutes: Int) = String.format(Locale.getDefault(), "%02d:%02d", minutes / 60, minutes % 60)
+    private fun daySummary(days: List<Int>): String {
+        if (days.size == 7) return "Setiap hari"
+        val labels = mapOf(1 to "Min", 2 to "Sen", 3 to "Sel", 4 to "Rab", 5 to "Kam", 6 to "Jum", 7 to "Sab")
+        return days.sortedBy { if (it == 1) 8 else it }.joinToString(", ") { labels[it] ?: "" }
+    }
     private fun dp(value: Int) = (value * resources.displayMetrics.density).toInt()
     private fun toast(text: String) = Toast.makeText(this, text, Toast.LENGTH_SHORT).show()
 }

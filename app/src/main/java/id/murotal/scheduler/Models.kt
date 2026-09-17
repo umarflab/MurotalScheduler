@@ -12,5 +12,9 @@ data class PlaybackSchedule(
     val startMinutes: Int,
     val endMinutes: Int,
     val volumePercent: Int,
+    val playbackMode: String = "single",
+    val stopMode: String = "time",
+    val days: List<Int> = listOf(1, 2, 3, 4, 5, 6, 7),
+    val fadeIn: Boolean = false,
     val enabled: Boolean = true
 )

@@ -17,6 +17,9 @@ class ScheduleReceiver : BroadcastReceiver() {
                     putStringArrayListExtra(PlaybackService.EXTRA_URIS, ArrayList(uris))
                     putExtra(PlaybackService.EXTRA_TITLE, schedule.name)
                     putExtra(PlaybackService.EXTRA_VOLUME, schedule.volumePercent)
+                    putExtra(PlaybackService.EXTRA_MODE, schedule.playbackMode)
+                    putExtra(PlaybackService.EXTRA_FADE_IN, schedule.fadeIn)
+                    putExtra(PlaybackService.EXTRA_RESTORE_VOLUME, true)
                 }
                 ContextCompat.startForegroundService(context, service)
             }
