@@ -4,6 +4,12 @@ data class AudioTrack(val id: String, val title: String, val uri: String)
 
 data class Playlist(val id: String, val name: String, val trackIds: List<String>)
 
+data class EqualizerSettings(
+    val enabled: Boolean = false,
+    val preset: String = "Normal",
+    val bands: List<Int> = listOf(0, 0, 0, 0, 0)
+)
+
 data class PlaybackSchedule(
     val id: String,
     val name: String,

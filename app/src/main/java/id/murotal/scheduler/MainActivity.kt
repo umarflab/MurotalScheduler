@@ -67,6 +67,7 @@ class MainActivity : AppCompatActivity() {
             addTab(newTab().setText("Pustaka"))
             addTab(newTab().setText("Playlist"))
             addTab(newTab().setText("Jadwal"))
+            addTab(newTab().setText("Equalizer"))
             addOnTabSelectedListener(object : TabLayout.OnTabSelectedListener {
                 override fun onTabSelected(tab: TabLayout.Tab) {
                     selectedTab = tab.position
@@ -83,7 +84,8 @@ class MainActivity : AppCompatActivity() {
     private fun renderTab() = when (selectedTab) {
         0 -> showLibrary()
         1 -> showPlaylists()
-        else -> showSchedules()
+        2 -> showSchedules()
+        else -> showEqualizer()
     }
 
     private fun showLibrary() {
@@ -146,7 +148,9 @@ class MainActivity : AppCompatActivity() {
             val dayName = daySummary(schedule.days)
             val fade = if (schedule.fadeIn) " • Fade-in" else ""
             val detail = "$dayName • $stopName\n$modeName • Volume ${schedule.volumePercent}%$fade • $status\n${store.targetName(schedule.targetType, schedule.targetId)}"
-            content.addView(card(schedule.name, detail, if (schedule.enabled) "Nonaktifkan" else "Aktifkan", {
+            content.addView(card(schedule.name, detail, "Edit", {
+                openScheduleDialog(schedule)
+            }, if (schedule.enabled) "Nonaktifkan" else "Aktifkan", {
                 val changed = schedule.copy(enabled = !schedule.enabled)
                 store.saveSchedules(store.schedules().map { if (it.id == schedule.id) changed else it })
                 if (changed.enabled) AlarmScheduler.schedule(this, changed) else AlarmScheduler.cancel(this, changed.id)
@@ -188,7 +192,7 @@ class MainActivity : AppCompatActivity() {
             }.show()
     }
 
-    private fun openScheduleDialog() {
+    private fun openScheduleDialog(existing: PlaybackSchedule? = null) {
         val tracks = store.tracks()
         val playlists = store.playlists().filter { it.trackIds.isNotEmpty() }
         if (tracks.isEmpty()) {
@@ -196,7 +200,10 @@ class MainActivity : AppCompatActivity() {
             return
         }
         val form = verticalContainer()
-        val name = EditText(this).apply { hint = "Nama jadwal, misalnya Murotal pagi" }
+        val name = EditText(this).apply {
+            hint = "Nama jadwal, misalnya Murotal pagi"
+            setText(existing?.name.orEmpty())
+        }
         val typeSpinner = Spinner(this)
         val typeLabels = if (playlists.isEmpty()) listOf("Track tunggal") else listOf("Track tunggal", "Playlist")
         typeSpinner.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, typeLabels)
@@ -210,8 +217,8 @@ class MainActivity : AppCompatActivity() {
             modeSpinner.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, modes)
         }
         typeSpinner.onItemSelectedListener = SimpleItemSelectedListener { refreshTargets() }
-        val startButton = Button(this).apply { text = "Mulai: 05:00" }
-        val endButton = Button(this).apply { text = "Berhenti: 06:00" }
+        val startButton = Button(this)
+        val endButton = Button(this)
         val stopSpinner = Spinner(this).apply {
             adapter = ArrayAdapter(this@MainActivity, android.R.layout.simple_spinner_dropdown_item,
                 listOf("Berhenti pada jam tertentu", "Berhenti setelah audio selesai"))
@@ -219,16 +226,19 @@ class MainActivity : AppCompatActivity() {
                 endButton.visibility = if (selectedItemPosition == 0) View.VISIBLE else View.GONE
             }
         }
-        var startMinutes = 300
-        var endMinutes = 360
+        var startMinutes = existing?.startMinutes ?: 300
+        var endMinutes = existing?.endMinutes ?: 360
+        startButton.text = "Mulai: ${time(startMinutes)}"
+        endButton.text = "Berhenti: ${time(endMinutes)}"
         startButton.setOnClickListener { chooseTime(startMinutes) { startMinutes = it; startButton.text = "Mulai: ${time(it)}" } }
         endButton.setOnClickListener { chooseTime(endMinutes) { endMinutes = it; endButton.text = "Berhenti: ${time(it)}" } }
         val volumeLabel = label("Volume: 60%")
         val volume = SeekBar(this).apply {
             max = 100
-            progress = 60
+            progress = existing?.volumePercent ?: 60
             setOnSeekBarChangeListener(SimpleSeekListener { volumeLabel.text = "Volume: $it%" })
         }
+        volumeLabel.text = "Volume: ${volume.progress}%"
         val daysTitle = label("Hari pemutaran")
         val dayRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         val dayValues = listOf(2, 3, 4, 5, 6, 7, 1)
@@ -236,12 +246,15 @@ class MainActivity : AppCompatActivity() {
         val dayChecks = dayValues.mapIndexed { index, _ ->
             CheckBox(this).apply {
                 text = dayLabels[index]
-                isChecked = true
+                isChecked = existing?.days?.contains(dayValues[index]) ?: true
                 buttonTintList = null
                 dayRow.addView(this, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
             }
         }
-        val fadeCheck = CheckBox(this).apply { text = "Fade-in 10 detik saat jadwal dimulai" }
+        val fadeCheck = CheckBox(this).apply {
+            text = "Fade-in 10 detik saat jadwal dimulai"
+            isChecked = existing?.fadeIn ?: false
+        }
         form.addView(name)
         form.addView(daysTitle); form.addView(dayRow)
         form.addView(label("Jenis sumber")); form.addView(typeSpinner)
@@ -251,10 +264,19 @@ class MainActivity : AppCompatActivity() {
         form.addView(label("Cara berhenti")); form.addView(stopSpinner); form.addView(endButton)
         form.addView(volumeLabel); form.addView(volume)
         form.addView(fadeCheck)
+        if (existing != null) {
+            typeSpinner.setSelection(if (existing.targetType == "track") 0 else 1)
+        }
         refreshTargets()
+        if (existing != null) {
+            val targets = if (existing.targetType == "track") tracks.map { it.id } else playlists.map { it.id }
+            targetSpinner.setSelection(targets.indexOf(existing.targetId).coerceAtLeast(0))
+            if (existing.targetType == "playlist") modeSpinner.setSelection(if (existing.playbackMode == "shuffle_cycle") 1 else 0)
+            stopSpinner.setSelection(if (existing.stopMode == "time") 0 else 1)
+        }
 
         val scroll = ScrollView(this).apply { addView(form) }
-        MaterialAlertDialogBuilder(this).setTitle("Jadwal baru").setView(scroll)
+        MaterialAlertDialogBuilder(this).setTitle(if (existing == null) "Jadwal baru" else "Edit jadwal").setView(scroll)
             .setNegativeButton("Batal", null).setPositiveButton("Simpan") { _, _ ->
                 if (name.text.isBlank()) {
                     toast("Nama jadwal wajib diisi")
@@ -268,14 +290,95 @@ class MainActivity : AppCompatActivity() {
                     return@setPositiveButton
                 }
                 val playbackMode = if (isTrack) "single" else if (modeSpinner.selectedItemPosition == 0) "sequential" else "shuffle_cycle"
-                val item = PlaybackSchedule(UUID.randomUUID().toString(), name.text.toString().trim(),
+                val item = PlaybackSchedule(existing?.id ?: UUID.randomUUID().toString(), name.text.toString().trim(),
                     if (isTrack) "track" else "playlist", targetId, startMinutes, endMinutes, volume.progress,
                     playbackMode, if (stopSpinner.selectedItemPosition == 0) "time" else "after_source",
-                    selectedDays, fadeCheck.isChecked)
-                val schedules = store.schedules(); schedules.add(item); store.saveSchedules(schedules)
+                    selectedDays, fadeCheck.isChecked, existing?.enabled ?: true)
+                val schedules = store.schedules()
+                if (existing == null) schedules.add(item) else {
+                    AlarmScheduler.cancel(this, existing.id)
+                    val position = schedules.indexOfFirst { it.id == existing.id }
+                    if (position >= 0) schedules[position] = item else schedules.add(item)
+                }
+                store.saveSchedules(schedules)
                 AlarmScheduler.schedule(this, item)
                 showSchedules()
             }.show()
+    }
+
+    private fun showEqualizer() {
+        content.removeAllViews()
+        val saved = store.equalizer()
+        val enabled = CheckBox(this).apply {
+            text = "Aktifkan equalizer dan efek ruang"
+            isChecked = saved.enabled
+            textSize = 16f
+        }
+        content.addView(enabled)
+        content.addView(label("Preset efek"))
+        val presets = listOf("Normal", "Voice", "Room", "Concert", "Ballroom", "Hall", "Plate", "Custom")
+        val presetSpinner = Spinner(this).apply {
+            adapter = ArrayAdapter(this@MainActivity, android.R.layout.simple_spinner_dropdown_item, presets)
+        }
+        content.addView(presetSpinner)
+        content.addView(emptyText("Room, Concert, Ballroom, Hall, dan Plate menggabungkan equalizer dengan reverb sistem Android. Hasilnya bergantung pada perangkat dan speaker."))
+
+        val frequencies = listOf("60 Hz", "230 Hz", "910 Hz", "3,6 kHz", "14 kHz")
+        val values = saved.bands.toMutableList()
+        val valueLabels = mutableListOf<TextView>()
+        val sliders = mutableListOf<SeekBar>()
+        var applyingPreset = false
+        frequencies.forEachIndexed { index, frequency ->
+            val valueLabel = label("$frequency: ${formatDb(values[index])}")
+            val slider = SeekBar(this).apply {
+                max = 200
+                progress = values[index] + 100
+                setOnSeekBarChangeListener(SimpleSeekListener { progress ->
+                    values[index] = progress - 100
+                    valueLabel.text = "$frequency: ${formatDb(values[index])}"
+                    if (!applyingPreset && presetSpinner.selectedItem?.toString() != "Custom") {
+                        presetSpinner.setSelection(presets.indexOf("Custom"))
+                    }
+                })
+            }
+            valueLabels.add(valueLabel)
+            sliders.add(slider)
+            content.addView(valueLabel)
+            content.addView(slider)
+        }
+
+        fun applyPreset(name: String) {
+            val presetValues = when (name) {
+                "Voice" -> listOf(-20, -5, 25, 35, 10)
+                "Room" -> listOf(10, 5, 0, 5, 10)
+                "Concert" -> listOf(15, 5, -5, 10, 20)
+                "Ballroom" -> listOf(10, 10, 0, 10, 15)
+                "Hall" -> listOf(5, 0, -5, 10, 20)
+                "Plate" -> listOf(0, 5, 5, 10, 10)
+                "Normal" -> listOf(0, 0, 0, 0, 0)
+                else -> return
+            }
+            applyingPreset = true
+            presetValues.forEachIndexed { index, value ->
+                values[index] = value
+                sliders[index].progress = value + 100
+                valueLabels[index].text = "${frequencies[index]}: ${formatDb(value)}"
+            }
+            applyingPreset = false
+        }
+
+        var initialSelection = true
+        presetSpinner.onItemSelectedListener = SimpleItemSelectedListener {
+            if (!initialSelection) applyPreset(presetSpinner.selectedItem.toString())
+        }
+        presetSpinner.setSelection(presets.indexOf(saved.preset).coerceAtLeast(0))
+        presetSpinner.post { initialSelection = false }
+
+        content.addView(primaryButton("Simpan pengaturan equalizer") {
+            store.saveEqualizer(EqualizerSettings(enabled.isChecked, presetSpinner.selectedItem.toString(), values.toList()))
+            toast("Pengaturan disimpan dan berlaku pada pemutaran berikutnya")
+        })
+        content.addView(emptyText("Gunakan peningkatan frekuensi secara bertahap. Pengaturan ekstrem dapat menyebabkan suara pecah pada speaker telepon."))
     }
 
     private fun play(uris: List<String>, title: String) {
@@ -293,7 +396,8 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun card(title: String, subtitle: String, actionText: String, action: () -> Unit,
-                     secondText: String?, secondAction: (() -> Unit)?): View {
+                     secondText: String?, secondAction: (() -> Unit)?,
+                     thirdText: String? = null, thirdAction: (() -> Unit)? = null): View {
         val box = verticalContainer().apply {
             setBackgroundColor(0xFFFFFFFF.toInt())
             setPadding(dp(16), dp(14), dp(16), dp(14))
@@ -306,6 +410,7 @@ class MainActivity : AppCompatActivity() {
         val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         row.addView(Button(this).apply { text = actionText; setOnClickListener { action() } })
         if (secondText != null && secondAction != null) row.addView(Button(this).apply { text = secondText; setOnClickListener { secondAction() } })
+        if (thirdText != null && thirdAction != null) row.addView(Button(this).apply { text = thirdText; setOnClickListener { thirdAction() } })
         box.addView(row)
         return box
     }
@@ -350,6 +455,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun time(minutes: Int) = String.format(Locale.getDefault(), "%02d:%02d", minutes / 60, minutes % 60)
+    private fun formatDb(value: Int): String = String.format(Locale.getDefault(), "%+.1f dB", value / 10f)
     private fun daySummary(days: List<Int>): String {
         if (days.size == 7) return "Setiap hari"
         val labels = mapOf(1 to "Min", 2 to "Sen", 3 to "Sel", 4 to "Rab", 5 to "Kam", 6 to "Jum", 7 to "Sab")

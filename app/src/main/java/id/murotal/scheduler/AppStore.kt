@@ -84,4 +84,21 @@ class AppStore(context: Context) {
     } else {
         playlists().firstOrNull { it.id == id }?.name ?: "Playlist tidak ditemukan"
     }
+
+    fun equalizer(): EqualizerSettings = runCatching {
+        val item = JSONObject(prefs.getString("equalizer", "{}") ?: "{}")
+        val values = item.optJSONArray("bands")
+        EqualizerSettings(
+            item.optBoolean("enabled", false),
+            item.optString("preset", "Normal"),
+            if (values != null && values.length() == 5) List(5) { values.getInt(it) }
+            else listOf(0, 0, 0, 0, 0)
+        )
+    }.getOrDefault(EqualizerSettings())
+
+    fun saveEqualizer(settings: EqualizerSettings) {
+        val item = JSONObject().put("enabled", settings.enabled).put("preset", settings.preset)
+            .put("bands", JSONArray(settings.bands))
+        prefs.edit().putString("equalizer", item.toString()).apply()
+    }
 }

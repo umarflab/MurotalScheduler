@@ -9,6 +9,8 @@ import android.content.Intent
 import android.media.AudioAttributes
 import android.media.AudioManager
 import android.media.MediaPlayer
+import android.media.audiofx.Equalizer
+import android.media.audiofx.PresetReverb
 import android.net.Uri
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
@@ -37,6 +39,8 @@ class PlaybackService : Service() {
     private var restoreVolume = false
     private var previousVolume: Int? = null
     private var targetPlayerVolume = 1f
+    private var equalizer: Equalizer? = null
+    private var reverb: PresetReverb? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -75,6 +79,7 @@ class PlaybackService : Service() {
 
     private fun playCurrent() {
         player?.release()
+        releaseAudioEffects()
         if (queueIndex !in queue.indices) {
             stopPlayback()
             return
@@ -84,6 +89,7 @@ class PlaybackService : Service() {
                 .setUsage(AudioAttributes.USAGE_MEDIA).build())
             setDataSource(applicationContext, Uri.parse(queue[queueIndex]))
             setOnPreparedListener {
+                applyAudioEffects(it.audioSessionId)
                 if (fadePending) {
                     fadePending = false
                     it.setVolume(0f, 0f)
@@ -109,6 +115,47 @@ class PlaybackService : Service() {
             }
             prepareAsync()
         }
+    }
+
+    private fun applyAudioEffects(sessionId: Int) {
+        val settings = AppStore(this).equalizer()
+        if (!settings.enabled) return
+        runCatching {
+            equalizer = Equalizer(0, sessionId).apply {
+                val range = bandLevelRange
+                val minimum = range[0].toInt()
+                val maximum = range[1].toInt()
+                val count = numberOfBands.toInt().coerceAtLeast(1)
+                for (band in 0 until count) {
+                    val source = if (count == 1) 2 else (band * 4f / (count - 1)).toInt().coerceIn(0, 4)
+                    val percent = settings.bands.getOrElse(source) { 0 }.coerceIn(-100, 100)
+                    val level = if (percent >= 0) percent * maximum / 100 else -percent * minimum / 100
+                    setBandLevel(band.toShort(), level.coerceIn(minimum, maximum).toShort())
+                }
+                enabled = true
+            }
+        }
+        val reverbPreset = when (settings.preset) {
+            "Room" -> PresetReverb.PRESET_SMALLROOM
+            "Concert" -> PresetReverb.PRESET_LARGEHALL
+            "Ballroom" -> PresetReverb.PRESET_MEDIUMHALL
+            "Hall" -> PresetReverb.PRESET_LARGEHALL
+            "Plate" -> PresetReverb.PRESET_PLATE
+            else -> PresetReverb.PRESET_NONE
+        }
+        if (reverbPreset != PresetReverb.PRESET_NONE) runCatching {
+            reverb = PresetReverb(0, sessionId).apply {
+                preset = reverbPreset
+                enabled = true
+            }
+        }
+    }
+
+    private fun releaseAudioEffects() {
+        runCatching { equalizer?.release() }
+        runCatching { reverb?.release() }
+        equalizer = null
+        reverb = null
     }
 
     private fun fadePlayer(activePlayer: MediaPlayer) {
@@ -140,6 +187,7 @@ class PlaybackService : Service() {
         player?.stop()
         player?.release()
         player = null
+        releaseAudioEffects()
         if (restoreVolume) {
             previousVolume?.let { saved ->
                 val audio = getSystemService(Context.AUDIO_SERVICE) as AudioManager
@@ -155,6 +203,7 @@ class PlaybackService : Service() {
     override fun onDestroy() {
         player?.release()
         player = null
+        releaseAudioEffects()
         super.onDestroy()
     }
 

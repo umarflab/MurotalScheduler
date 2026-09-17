@@ -12,6 +12,8 @@ Aplikasi Android offline untuk memutar murotal atau audio lain secara manual dan
 - Pilih hari aktif dan cara berhenti berdasarkan jam atau akhir audio.
 - Gunakan mode Single, Sequential, atau Shuffle Cycle pada setiap jadwal.
 - Terapkan fade-in 10 detik dan pulihkan volume media sebelumnya setelah jadwal selesai.
+- Edit jadwal yang telah disimpan tanpa membuat alarm ganda.
+- Aktifkan equalizer lima pita dan preset Voice, Room, Concert, Ballroom, Hall, serta Plate.
 - Pulihkan jadwal setelah telepon dinyalakan ulang.
 - Berjalan tanpa koneksi internet.
 
