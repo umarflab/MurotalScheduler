@@ -98,7 +98,7 @@ class PlaybackService : Service() {
                 .setUsage(AudioAttributes.USAGE_MEDIA).build())
             setDataSource(applicationContext, Uri.parse(queue[queueIndex]))
             setOnPreparedListener {
-                applyAudioEffects(it.audioSessionId)
+                applyAudioEffects(it)
                 if (fadePending) {
                     fadePending = false
                     it.setVolume(0f, 0f)
@@ -126,10 +126,10 @@ class PlaybackService : Service() {
         }
     }
 
-    private fun applyAudioEffects(sessionId: Int) {
+    private fun applyAudioEffects(activePlayer: MediaPlayer) {
         if (!eqEnabled) return
         runCatching {
-            equalizer = Equalizer(0, sessionId).apply {
+            equalizer = Equalizer(0, activePlayer.audioSessionId).apply {
                 val range = bandLevelRange
                 val minimum = range[0].toInt()
                 val maximum = range[1].toInt()
@@ -143,19 +143,21 @@ class PlaybackService : Service() {
                 enabled = true
             }
         }
-        val reverbPreset = when (eqPreset) {
-            "Room" -> PresetReverb.PRESET_SMALLROOM
-            "Concert" -> PresetReverb.PRESET_LARGEHALL
-            "Ballroom" -> PresetReverb.PRESET_MEDIUMHALL
-            "Hall" -> PresetReverb.PRESET_LARGEHALL
-            "Plate" -> PresetReverb.PRESET_PLATE
-            else -> PresetReverb.PRESET_NONE
+        val reverbConfig = when (eqPreset) {
+            "Room" -> PresetReverb.PRESET_SMALLROOM to 0.35f
+            "Ballroom" -> PresetReverb.PRESET_LARGEROOM to 0.65f
+            "Concert" -> PresetReverb.PRESET_LARGEHALL to 0.85f
+            "Hall" -> PresetReverb.PRESET_MEDIUMHALL to 0.60f
+            "Plate" -> PresetReverb.PRESET_PLATE to 0.50f
+            else -> PresetReverb.PRESET_NONE to 0f
         }
-        if (reverbPreset != PresetReverb.PRESET_NONE) runCatching {
-            reverb = PresetReverb(0, sessionId).apply {
-                preset = reverbPreset
+        if (reverbConfig.first != PresetReverb.PRESET_NONE) runCatching {
+            reverb = PresetReverb(0, 0).apply {
+                preset = reverbConfig.first
                 enabled = true
             }
+            activePlayer.attachAuxEffect(reverb!!.id)
+            activePlayer.setAuxEffectSendLevel(reverbConfig.second)
         }
     }
 
