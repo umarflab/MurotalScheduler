@@ -8,6 +8,7 @@ import android.content.Context
 import android.content.Intent
 import android.media.AudioAttributes
 import android.media.AudioManager
+import android.content.res.AssetFileDescriptor
 import android.media.MediaPlayer
 import android.media.audiofx.Equalizer
 import android.media.audiofx.PresetReverb
@@ -43,6 +44,7 @@ class PlaybackService : Service() {
     }
 
     private var player: MediaPlayer? = null
+    private var sourceDescriptor: AssetFileDescriptor? = null
     private var queue: List<String> = emptyList()
     private var queueIndex = 0
     private var title = "Murotal Scheduler"
@@ -178,14 +180,18 @@ class PlaybackService : Service() {
     private fun setPlayerDataSource(activePlayer: MediaPlayer, source: String) {
         val uri = Uri.parse(source)
         if (uri.scheme == "content") {
-            val descriptor = contentResolver.openAssetFileDescriptor(uri, "r")
+            sourceDescriptor?.close()
+            sourceDescriptor = contentResolver.openAssetFileDescriptor(uri, "r")
                 ?: throw IOException("Android tidak dapat membuka file audio.")
-            descriptor.use {
-                if (it.declaredLength >= 0) {
-                    activePlayer.setDataSource(it.fileDescriptor, it.startOffset, it.declaredLength)
-                } else {
-                    activePlayer.setDataSource(it.fileDescriptor)
-                }
+            val descriptor = sourceDescriptor!!
+            if (descriptor.declaredLength > 0) {
+                activePlayer.setDataSource(
+                    descriptor.fileDescriptor,
+                    descriptor.startOffset,
+                    descriptor.declaredLength
+                )
+            } else {
+                activePlayer.setDataSource(descriptor.fileDescriptor)
             }
         } else {
             activePlayer.setDataSource(applicationContext, uri)
@@ -286,6 +292,8 @@ class PlaybackService : Service() {
         player = null
         runCatching { activePlayer?.reset() }
         runCatching { activePlayer?.release() }
+        runCatching { sourceDescriptor?.close() }
+        sourceDescriptor = null
     }
 
     private fun stopPlayback(errorMessage: String? = null) {
